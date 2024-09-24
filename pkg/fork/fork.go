@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-state-types/abi"
@@ -444,6 +445,11 @@ func DefaultUpgradeSchedule(cf *ChainFork, upgradeHeight *config.ForkUpgradeConf
 				StopWithin:      10,
 			}},
 			Expensive: true,
+		},
+		{
+			Height:    upgradeHeight.UpgradeEverythingBurnsHeight,
+			Network:   network.Version23,
+			Migration: cf.UpgradeEverythingBurns,
 		},
 	}
 
@@ -3451,6 +3457,78 @@ func (c *ChainFork) upgradeActorsV14Common(
 	}
 
 	return newRoot, nil
+}
+
+func (c *ChainFork) UpgradeEverythingBurns(ctx context.Context, cache MigrationCache, root cid.Cid, epoch abi.ChainEpoch, ts *types.TipSet) (cid.Cid, error) {
+	writeStore := blockstoreutil.NewAutobatch(ctx, c.bs, units.GiB/4)
+	adtStore := adt.WrapStore(ctx, cbor.NewCborStore(writeStore))
+	// Load input state tree
+	tree, err := vmstate.LoadState(ctx, adtStore, root)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("loading state tree: %w", err)
+	}
+
+	reserveAct, found, err := tree.GetActor(ctx, builtin.ReserveAddress)
+	if err != nil {
+		return cid.Undef, xerrors.Errorf("failed to load mining reserve actor: %w", err)
+	}
+	if !found {
+		return cid.Undef, xerrors.Errorf("failed to load mining reserve actor")
+	}
+
+	if err := DoTransfer(ctx, tree, builtin.ReserveAddress, builtin0.BurntFundsActorAddr, reserveAct.Balance); err != nil {
+		return cid.Undef, xerrors.Errorf("failed to burn reserve: %w", err)
+	}
+	// Now, a final sanity check to make sure the balances all check out
+	total := abi.NewTokenAmount(0)
+	err = tree.ForEach(func(addr address.Address, act *types.Actor) error {
+		total = types.BigAdd(total, act.Balance)
+		return nil
+	})
+	if err != nil {
+		return cid.Undef, xerrors.Errorf("checking final state balance failed: %w", err)
+	}
+	exp := types.FromFil(constants.FilBase)
+	if !exp.Equals(total) {
+		return cid.Undef, xerrors.Errorf("resultant state tree account balance was not correct: %s", total)
+	}
+
+	return tree.Flush(ctx)
+}
+
+func DoTransfer(ctx context.Context, tree vmstate.Tree, from, to address.Address, amt abi.TokenAmount) error {
+	fromAct, found, err := tree.GetActor(ctx, from)
+	if err != nil {
+		return xerrors.Errorf("failed to get 'from' actor for transfer: %w", err)
+	}
+	if !found {
+		return xerrors.Errorf("failed to get 'from' actor for transfer")
+	}
+
+	fromAct.Balance = types.BigSub(fromAct.Balance, amt)
+	if fromAct.Balance.Sign() < 0 {
+		return xerrors.Errorf("(sanity) deducted more funds from target account than it had (%s, %s)", from, types.FIL(amt))
+	}
+
+	if err := tree.SetActor(ctx, from, fromAct); err != nil {
+		return xerrors.Errorf("failed to persist from actor: %w", err)
+	}
+
+	toAct, found, err := tree.GetActor(ctx, to)
+	if err != nil {
+		return xerrors.Errorf("failed to get 'to' actor for transfer: %w", err)
+	}
+	if !found {
+		return xerrors.Errorf("failed to get 'to' actor for transfer")
+	}
+
+	toAct.Balance = types.BigAdd(toAct.Balance, amt)
+
+	if err := tree.SetActor(ctx, to, toAct); err != nil {
+		return xerrors.Errorf("failed to persist to actor: %w", err)
+	}
+
+	return nil
 }
 
 func (c *ChainFork) GetForkUpgrade() *config.ForkUpgradeConfig {

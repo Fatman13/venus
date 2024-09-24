@@ -68,6 +68,7 @@ func Calibration() *NetworkConf {
 				UpgradeDragonHeight:               1427974,       // 2024-03-11T14:00:00Z
 				UpgradeCalibrationDragonFixHeight: 1493854,       // 2024-04-03T11:00:00Z
 				UpgradeWaffleHeight:               1779094,       // 2024-07-11T12:00:00Z
+				UpgradeEverythingBurnsHeight:      2018134,       // 2024-10-02T12:00:00Z
 			},
 			DrandSchedule:           map[abi.ChainEpoch]config.DrandEnum{0: 1},
 			AddressNetwork:          address.Testnet,

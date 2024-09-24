@@ -64,6 +64,7 @@ func ForceNet() *NetworkConf {
 				UpgradeCalibrationDragonFixHeight: -102, // This fix upgrade only ran on calibrationnet
 				UpgradePhoenixHeight:              -26,
 				UpgradeWaffleHeight:               200,
+				UpgradeEverythingBurnsHeight:      -27,
 			},
 			DrandSchedule:           map[abi.ChainEpoch]config.DrandEnum{0: config.DrandQuicknet},
 			AddressNetwork:          address.Testnet,
